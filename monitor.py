@@ -2,16 +2,13 @@ import hashlib
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 
-
 URL = "https://sjys.ivolunteer.com/"
 KEYWORD = "prelude"
-
 STATE_FILE = Path("state.json")
 
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
@@ -22,7 +19,9 @@ def fetch_page():
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 Chrome/131 Safari/537.36"
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/131.0 Safari/537.36"
         )
     }
 
@@ -39,20 +38,19 @@ def fetch_page():
 def extract_matches(html):
     soup = BeautifulSoup(html, "html.parser")
 
-    # Remove things that normally don't represent the event/name.
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
     text = soup.get_text("\n", strip=True)
 
-    lines = [
-        re.sub(r"\s+", " ", line).strip()
-        for line in text.splitlines()
-    ]
+    lines = []
 
-    lines = [line for line in lines if line]
+    for line in text.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
 
-    # Find lines containing "prelude", case-insensitive.
+        if line:
+            lines.append(line)
+
     matches = [
         line
         for line in lines
@@ -60,9 +58,7 @@ def extract_matches(html):
     ]
 
     # Remove duplicates while preserving order.
-    matches = list(dict.fromkeys(matches))
-
-    return matches
+    return list(dict.fromkeys(matches))
 
 
 def load_state():
@@ -75,18 +71,26 @@ def load_state():
         return None
 
 
+def calculate_hash(matches):
+    data = json.dumps(
+        matches,
+        sort_keys=True,
+    )
+
+    return hashlib.sha256(
+        data.encode("utf-8")
+    ).hexdigest()
+
+
 def save_state(matches):
+    state = {
+        "matches": matches,
+        "hash": calculate_hash(matches),
+    }
+
     STATE_FILE.write_text(
         json.dumps(
-            {
-                "matches": matches,
-                "hash": hashlib.sha256(
-                    json.dumps(
-                        matches,
-                        sort_keys=True,
-                    ).encode()
-                ).hexdigest(),
-            },
+            state,
             indent=2,
         )
     )
@@ -95,7 +99,10 @@ def save_state(matches):
 def send_notification(matches):
     message = (
         "Prelude detected/changed on SJYS.\n\n"
-        + "\n".join(f"• {match}" for match in matches)
+        + "\n".join(
+            f"• {match}"
+            for match in matches
+        )
         + f"\n\n{URL}"
     )
 
@@ -115,53 +122,54 @@ def send_notification(matches):
 
     response.raise_for_status()
 
+    print("Notification sent successfully.")
+
 
 def main():
-    try:
-        html = fetch_page()
-        matches = extract_matches(html)
+    print("Checking SJYS...")
+    print(f"Looking for: {KEYWORD}")
 
-        print("Matches found:")
-        for match in matches:
-            print(f"  {match}")
+    html = fetch_page()
 
-        previous = load_state()
+    matches = extract_matches(html)
 
-        current_hash = hashlib.sha256(
-            json.dumps(
-                matches,
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+    print(f"Found {len(matches)} matching line(s).")
 
-        previous_hash = previous.get("hash") if previous else None
+    for match in matches:
+        print(f"  {match}")
 
-        # First run:
-        # Save the current state but DON'T alert.
-        if previous is None:
-            print("First run - saving initial state without alert.")
-            save_state(matches)
-            return
+    previous = load_state()
 
-        # No matching Prelude content.
-        if not matches:
-            print("No Prelude match.")
-            save_state(matches)
-            return
+    current_hash = calculate_hash(matches)
 
-        # Matching content changed.
-        if current_hash != previous_hash:
-            print("CHANGE DETECTED - sending notification!")
-            send_notification(matches)
-            save_state(matches)
-            return
+    # First run: establish baseline.
+    if previous is None:
+        print("First run.")
+        print("Saving baseline without sending notification.")
 
-        print("No change.")
+        save_state(matches)
+        return
+
+    previous_hash = previous.get("hash")
+
+    # Nothing containing Prelude is currently present.
+    if not matches:
+        print("No Prelude match.")
+
+        save_state(matches)
+        return
+
+    # Prelude content has appeared or changed.
+    if current_hash != previous_hash:
+        print("CHANGE DETECTED!")
+
+        send_notification(matches)
+
+        save_state(matches)
+        return
+
+    print("No change detected.")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+    main()
