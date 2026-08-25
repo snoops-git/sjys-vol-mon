@@ -156,7 +156,7 @@ def main():
     # Nothing containing Prelude is currently present.
     if not matches:
         print("No Prelude match.")
-        send_notification(matches)
+        # send_notification(matches)
         save_state(matches)
         return
 
