@@ -145,6 +145,7 @@ def main():
     # First run: establish baseline.
     if previous is None:
         print("First run.")
+        send_notification(matches)
         print("Saving baseline without sending notification.")
 
         save_state(matches)
